@@ -1,94 +1,98 @@
-# 说明
-这里是项目[FareedKhan-dev/optimize-ai-agent-memory](https://github.com/FareedKhan-dev/optimize-ai-agent-memory)的中文版，感谢原作者。
+<!-- omit in toc -->
+# Optimizing Memory of AI Agents
 
-其中code_zh.ipynb出自bilibili视频[入门Agent Memory看这个就够了【代码精读】](https://www.bilibili.com/video/BV1qnzQBMEnq/)，感谢原作者[日新月异max](https://space.bilibili.com/3546957802899978)。
+One way to optimize an AI agent is to design its [architecture with multiple sub-agents to improve accuracy](https://medium.com/r/?url=https%3A%2F%2Flevelup.gitconnected.com%2Fbuilding-a-multi-agent-ai-system-with-langgraph-and-langsmith-6cb70487cd81). However, in conversational AI, optimization doesn’t stop there—memory becomes even more crucial.
 
-## 项目结构
-```
-optimize-ai-agent-memory-cn/
-|
-|-- cheatsheet_cn.md        # 中文版速查表
-|-- code_zh.ipynb           # 中文注释的代码
-|-- README.md               # 本文档
-|-- en/                     # Poptimize-ai-agent-memory项目英文原版
-    |
-    |-- cheatsheet.md          
-    |-- code.ipynb              
-    |-- README.md              
-```
+This is due to components like **previous context storage**, **tool calling**, **database searches**, and other dependencies your AI agent relies on.
 
-# 优化 AI Agent 的记忆
-优化 AI Agent 的一种方法是将其**架构设计为多个子 Agent 以提高准确性**。然而，在对话式 AI 中，优化不止于此——记忆（Memory）变得更为关键。
+In this blog, we will code and evaluate **9 beginner-to-advanced memory optimization techniques** for AI agents.
 
-这是因为您的 AI Agent 依赖于**先前的上下文存储、工具调用、数据库搜索**以及其他依赖项。
+You will learn how to apply each technique, along with their advantages and drawbacks—from simple sequential approaches to advanced, OS-like memory management implementations.
 
-在这篇博客中，我们将编写代码并评估**9种从入门到高级的 AI Agent 记忆优化技术**。
+![Summary about Techniques (Created by Fareed Khan)](https://cdn-images-1.medium.com/max/1500/1*HWTB54ixrmc4HXuj2nXaNw.png)
 
-您将学习如何应用每种技术，以及它们的优缺点——从简单的顺序方法到高级的、类似操作系统的记忆管理实现。
+To keep things clear and practical, we will use a simple AI agent throughout the blog. This will help us observe the internal mechanics of each technique and make it easier to scale and implement these strategies in more complex systems.
 
-为了保持清晰和实用，我们将在整个博客中使用一个简单的 AI Agent。这将帮助我们观察每种技术的内部机制，并使得在更复杂的系统中扩展和实现这些策略变得更加容易。
-
-### 目录
-
+<!-- omit in toc -->
+### Table of Contents
+- [Setting up the Environment](#setting-up-the-environment)
+- [Creating Helper Functions](#creating-helper-functions)
+- [Creating Foundational Agent and Memory Class](#creating-foundational-agent-and-memory-class)
+- [Problem with Sequential Optimization Approach](#problem-with-sequential-optimization-approach)
+- [Sliding Window Approach](#sliding-window-approach)
+- [Summarization Based Optimization](#summarization-based-optimization)
+- [Retrieval Based Memory](#retrieval-based-memory)
+- [Memory Augmented Transformers](#memory-augmented-transformers)
+- [Hierarchical Optimization for Multi-tasks](#hierarchical-optimization-for-multi-tasks)
+- [Graph Based Optimization](#graph-based-optimization)
+- [Compression \& Consolidation Memory](#compression--consolidation-memory)
+- [OS-Like Memory Management](#os-like-memory-management)
+- [Choosing the Right Strategy](#choosing-the-right-strategy)
 
 ---
 
-### 设置环境
+### Setting up the Environment
+To optimize and test different memory techniques for AI agents, we need to initialize several components before starting the evaluation. But before initializing, we first need to install the necessary Python libraries.
 
-为了优化和测试 AI Agent 的不同记忆技术，我们需要在开始评估之前初始化几个组件。但在初始化之前，我们首先需要安装必要的 Python 库。
+We will need:
+*   `openai`: The client library for interacting with the LLM API.
+*   `numpy`: For numerical operations, especially with embeddings.
+*   `faiss-cpu`: A library from Facebook AI for efficient similarity search, which will power our retrieval memory. It's a perfect in-memory vector database.
+*   `networkx`: For creating and managing the knowledge graph in our Graph-Based Memory strategy.
+*   `tiktoken`: To accurately count tokens and manage context window limits.
 
-我们将需要：
-
-- openai：用于与 LLM API 交互的客户端库。
-
-- numpy：用于数值操作，尤其是嵌入（embeddings）。
-
-- faiss-cpu：来自 Facebook AI 的库，用于高效的相似性搜索，它将为我们的检索记忆提供动力。这是一个完美的内存向量数据库。
-
-- networkx：用于在我们的基于图的记忆策略中创建和管理知识图谱。
-
-- tiktoken：用于准确计算 token 并管理上下文窗口限制。
-
-让我们安装这些模块。
+Let’s install these modules.
 ```python
+# Installing Required Dependencies
 pip install openai numpy faiss-cpu networkx tiktoken
 ```
-现在我们需要初始化客户端模块，它将用于进行 LLM 调用。让我们开始吧。
 
+Now we need to initialize the client module, which will be used to make LLM calls. Let’s do that.
 ```python
+# Import necessary libraries
 import os
 from openai import OpenAI
 
+# Define the API key for authentication.
+API_KEY = "YOUR_LLM_API_KEY"
 
-API_KEY = "sk-xxxx"  # 替换为你的 API 密钥
-BASE_URL = "https://api.siliconflow.cn/v1"
+# Define the base URL for the API endpoint.
+BASE_URL = "https://api.studio.nebius.com/v1/"
 
+# Initialize the OpenAI client with the specified base URL and API key.
+client = OpenAI(
+    base_url=BASE_URL,
+    api_key=API_KEY
+)
 
-client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
-
-
+# Print a confirmation message to indicate successful client setup.
 print("OpenAI client configured successfully.")
 ```
 
-我们将通过国内的 `硅基流动` 这样的 API 提供商使用开源模型。接下来，我们需要导入并决定使用哪个开源 LLM 来创建我们的 AI Agent。
-（不知道如何获取API的，可以参考[算栗工坊的文章](https://www.suanlilog.com/2026/04/09/tutorial/%E5%9F%BA%E4%BA%8Eclaude%20code%E9%87%8D%E6%9E%84%E7%9A%84python%E4%BB%A3%E7%A0%81%E5%8F%8A%E5%85%B6rust%E8%BF%90%E8%A1%8C%E7%89%88%EF%BC%88%E5%8F%AF%E7%94%A8%E7%AC%AC%E4%B8%89%E6%96%B9API%EF%BC%89/#%E7%AC%AC%E4%B8%80%E6%AD%A5%EF%BC%9A%E8%8E%B7%E5%8F%96%E5%A4%A7%E6%A8%A1%E5%9E%8B-API-%E5%AF%86%E9%92%A5)的第一步）
-
-对于主要任务，我们使用 DeepSeek-V3.2 模型。一些优化依赖于嵌入模型，为此我们将使用 Qwen/Qwen3-Embedding-8B 嵌入模型。
-
+We will be using open-source models through an API provider such as Bnebius or Together AI. Next, we need to import and decide which open-source LLM will be used to create our AI agent.
 ```python
+# Import additional libraries for functionality.
+import tiktoken
+import time
+
 # --- Model Configuration ---
-GENERATION_MODEL = "deepseek-ai/DeepSeek-V3.2"
-EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-8B"
+# Define the specific models to be used for generation and embedding tasks.
+# These are hardcoded for this lab but could be loaded from a config file.
+GENERATION_MODEL = "meta-llama/Meta-Llama-3.1-8B-Instruct"
+EMBEDDING_MODEL = "BAAI/bge-multilingual-gemma2"
 ```
-接下来，我们需要定义贯穿本博客使用的多个辅助函数。
 
-### 创建辅助函数
-为了避免重复代码并遵循良好的编码实践，我们将定义三个将在本指南中贯穿使用的辅助函数：
-- generate_text：根据传递给 LLM 的系统和用户提示生成内容。
-- generate_embeddings：为基于检索的方法生成嵌入。
-- count_tokens：计算每种基于检索的方法的总 token 数。
+For the main tasks, we are using the `LLaMA 3.1 8B Instruct` model. Some of the optimizations depend on an embedding model, for which we will be using the `Gemma-2-BGE` multimodal embedding model.
 
-让我们从编写第一个函数 generate_text 开始，它将根据给定的输入提示生成文本。
+Next, we need to define multiple helpers that will be used throughout this blog.
+
+### Creating Helper Functions
+To avoid repetitive code and follow good coding practices, we will define three helper functions that will be used throughout this guide:
+*   `generate_text`: Generates content based on the system and user prompts passed to the LLM.
+*   `generate_embeddings`: Generates embeddings for retrieval-based approaches.
+*   `count_tokens`: Counts the total number of tokens for each retrieval-based approach.
+
+Let’s start by coding the first function, `generate_text`, which will generate text based on the given input prompt.
 ```python
 def generate_text(system_prompt: str, user_prompt: str) -> str:
     """
@@ -113,9 +117,9 @@ def generate_text(system_prompt: str, user_prompt: str) -> str:
     return response.choices[0].message.content
 ```
 
-我们的 generate_text 函数接受两个输入：系统提示（system prompt）和用户提示（user prompt）。基于我们的文本生成模型 LLaMA 3.1 8B，它使用客户端模块生成响应。
+Our `generate_text` function takes two inputs: a system prompt and a user prompt. Based on our text generation model, `LLaMA 3.1 8B`, it generates a response using the client module.
 
-接下来，我们编写 generate_embeddings 函数。我们为此选择了 Gemma-2 模型，并且我们将使用同一个客户端模块来生成嵌入。
+Next, let’s code the `generate_embeddings` function. We have chosen the `Gemma-2` model for this purpose, and we will use the same client module to generate embeddings.
 ```python
 def generate_embedding(text: str) -> list[float]:
     """
@@ -136,19 +140,19 @@ def generate_embedding(text: str) -> list[float]:
     return response.data[0].embedding
 ```
 
-我们的嵌入函数使用选定的 Gemma-2 模型返回给定输入文本的嵌入向量。
+Our embedding function returns the embedding of the given input text using the selected `Gemma-2` model.
 
-现在，我们还需要一个函数来根据整个 AI 和用户的聊天记录计算 token 数。这有助于我们理解整体流程及其是如何被优化的。
+Now, we need one more function that will count tokens based on the entire AI and user chat history. This helps us understand the overall flow and how it has been optimized.
 
-我们将使用许多 LLM 架构中最常见和最现代的通证化器（tokenizer），即 OpenAI 的 cl100k_base，这是一个字节对编码（BPE）通证化器。
+We will use the most common and modern tokenizer used in many LLM architectures, OpenAI `cl100k_base`, which is a Byte Pair Encoding (BPE) tokenizer.
 
-简单来说，BPE 是一种将文本高效地拆分为子词单元的通证化算法。
+BPE, in simpler terms, is a tokenization algorithm that efficiently splits text into sub-word units.
 ```bash
 # BPE Example
 "lower", "lowest" → ["low", "er"], ["low", "est"]
 ```
 
-所以让我们使用 tiktoken 模块初始化通证化器：
+So let’s initialize the tokenizer using the `tiktoken` module:
 ```python
 # --- Token Counting Setup ---
 # Initialize the tokenizer using tiktoken. 'cl100k_base' is a common encoding
@@ -157,7 +161,7 @@ def generate_embedding(text: str) -> list[float]:
 tokenizer = tiktoken.get_encoding("cl100k_base")
 ```
 
-我们现在可以创建一个函数来对文本进行通证化并计算 token 总数。
+We can now create a function to tokenize the text and count the total number of tokens.
 ```python
 def count_tokens(text: str) -> int:
     """
@@ -174,15 +178,15 @@ def count_tokens(text: str) -> int:
     return len(tokenizer.encode(text))
 ```
 
-太棒了！既然我们已经创建了所有辅助函数，我们就可以开始探索不同的技术来学习和评估它们了。
+Great! Now that we have created all the helper functions, we can start exploring different techniques to learn and evaluate them.
 
-### 创建基础Agent和记忆类
-现在我们需要创建 Agent 的核心设计结构，以便在整个指南中使用它。关于记忆，有三个重要组件在任何 AI Agent 中起着关键作用：
-- 将过去的消息添加到 AI Agent 的记忆中，使 Agent 了解上下文。
-- 检索相关内容，帮助 AI Agent 生成响应。
-- 在每种策略执行后清除 AI Agent 的记忆。
+### Creating Foundational Agent and Memory Class
+Now we need to create the core design structure of our agent so that it can be used throughout the guide. Regarding memory, there are three important components that play a key role in any AI agent:
+*   Adding past messages to the AI agent’s memory to make the agent aware of the context.
+*   Retrieving relevant content that helps the AI agent generate responses.
+*   Clearing the AI agent’s memory after each strategy has been implemented.
 
-面向对象编程（OOP）是构建这种基于记忆的功能的最佳方式，因此让我们创建它。
+Object-Oriented Programming (OOP) is the best way to build this memory-based feature, so let’s create that.
 ```python
 import abc
 
@@ -221,9 +225,9 @@ class BaseMemoryStrategy(abc.ABC):
         pass
 ```
 
-我们使用了 @abstractmethod，这是在复用具有不同实现的子类时常见的编码风格。在我们的案例中，每种策略（即子类）都包含不同类型的实现，因此在设计中使用抽象方法是必要的。
+We are using `@abstractmethod`, which is a common coding style when subclasses are reused with different implementations. In our case, each strategy (which is a subclass) includes a different kind of implementation, so it is necessary to use abstract methods in the design.
 
-现在，基于我们刚刚定义的记忆状态和创建的辅助函数，我们可以使用 OOP 原则构建我们的 AI Agent 结构。让我们编写代码然后理解这个过程。
+Now, based on the memory state we recently defined and the helper functions we’ve created, we can build our AI agent structure using OOP principles. Let’s code that and then understand the process.
 ```python
 # --- The Core AI Agent ---
 # This class orchestrates the entire conversation flow. It is initialized with a
@@ -288,45 +292,32 @@ class AIAgent:
         print(f"{'='*70}")
 ```
 
-所以，我们的 Agent 基于 6 个简单的步骤。
-1. 首先，它根据我们将要使用的策略从记忆中**检索**上下文，并记录过程中花费的时间等。
-2. 然后，它将检索到的记忆上下文与当前用户输入**合并**，准备成一个完整的 LLM 提示词。
-3. 接着，它会**打印**一些调试信息，例如提示词可能使用的 token 数量以及上下文检索花费的时间。
-4. 然后，它将完整的提示词（系统 + 用户 + 上下文）**发送**给 LLM 并等待响应。
-5. 之后，它用这次新的交互**更新**记忆，以便将其用于未来的上下文。
-6. 最后，它**显示**AI 的响应以及生成它所花费的时间，从而结束这一轮对话。
+So, our agent is based on 6 simple steps.
+1.  First it **retrieves** the context from memory based on the strategy we will be using, during the process how much time it takes and so.
+2.  Then it **merges** the retrieved memory context with the current user input, preparing it as a complete prompt for the LLM.
+3.  Then it prints some **debug info**, things like how many tokens the prompt might use and how long context retrieval took.
+4.  Then it sends the full prompt (system + user + context) to the LLM and waits for a **response**.
+5.  Then it **updates the memory** with this new interaction, so it’s available for future context.
+6.  And finally, it shows the **AI’s response** along with how long it took to generate, wrapping up this turn of the conversation.
 
-太棒了！既然我们已经编写了每个组件的代码，我们可以开始理解和实现每一种记忆优化技术了。
+Great! Now that we have coded every component, we can start understanding and implementing each of the memory optimization techniques.
 
-### 顺序优化方法的问题
-第一个优化方法是最基础和最简单的，被许多开发者广泛使用。它是管理对话历史最早的方法之一，常用于早期的聊天机器人。
+### Problem with Sequential Optimization Approach
+The very first optimization approach is the most basic and simplest, commonly used by many developers. It was one of the earliest methods to manage conversation history, often used by early chatbots.
 
-这种方法涉及将每条新消息添加到运行日志中，并且每次都将整个对话反馈给模型。它创建了一个线性的记忆链，保留了到目前为止所说的一切。让我们对其进行可视化。
+This method involves adding each new message to a running log and feeding the entire conversation back to the model every time. It creates a linear chain of memory, preserving everything that has been said so far. Let’s visualize it.
 
-```mermaid
-graph TD
-    A[开始对话] --> B[用户消息 1]
-    B --> C[机器人回复 1]
-    C --> D[用户消息 2]
-    D --> E[机器人回复 2]
-    E --> F[将所有消息添加到上下文]
-    F --> G[发送完整历史记录至模型]
-    G --> H[生成回复]
-    H --> I{对话是否简短？}
-    I -- 是 --> J[继续添加到历史记录]
-    I -- 否 --> K[达到上下文限制 ⚠️]
-    K --> L[处理缓慢 / 成本高昂 🔄]
-```
+![Sequential Approach](https://cdn-images-1.medium.com/max/1000/1*FR3VjWxc0adX5YfTatKluw.png)
+*Sequential Approach (Created by Fareed Khan)*
 
+Sequential approach works like this…
+1.  User starts a conversation with the AI agent.
+2.  The agent responds.
+3.  This user-AI interaction (a “turn”) is saved as a single block of text.
+4.  For the next turn, the agent takes the entire history (Turn 1 + Turn 2 + Turn 3…) and combines it with the new user query.
+5.  This massive block of text is sent to the LLM to generate the next response.
 
-顺序方法的工作原理如下……
-1. 用户开始与 AI Agent 对话。
-2. Agent 做出响应。
-3. 这种用户-AI 交互（一个“轮次”）被保存为单个文本块。
-4. 在下一轮中，Agent 获取整个历史记录（轮次 1 + 轮次 2 + 轮次 3……）并将其与新的用户查询结合起来。
-5. 这个巨大的文本块被发送给 LLM 以生成下一个响应。
-
-使用我们的 Memory 类，我们现在可以实现顺序优化方法了。让我们编写代码。
+Using our `Memory` class, we can now implement the sequential optimization approach. Let's code that.
 ```python
 # --- Strategy 1: Sequential (Keep-It-All) Memory ---
 # This is the most basic memory strategy. It stores the entire conversation
@@ -361,15 +352,15 @@ class SequentialMemory(BaseMemoryStrategy):
         print("Sequential memory cleared.")
 ```
 
-现在您可能明白我们的基础 Memory 类在这里做什么了。我们的子类（每种方法）将实现我们在整个指南中定义的相同抽象方法。
+Now you might understand what our base `Memory` class is doing here. Our subclasses (each approach) will implement the same abstract methods that we define throughout the guide.
 
-让我们快速浏览一下代码以了解它是如何工作的。
-- `__init__(self)`：初始化一个空的 self.history 列表来存储对话。
-- add_message(...)：将用户的输入和 AI 的响应添加到历史记录中。
-- get_context(...)：将历史记录格式化并拼接成单个“角色：内容”字符串作为上下文。
-- clear()：重置历史记录以开启新对话。
+Let’s quickly go over the code to understand how it works.
+*   `__init__(self)`: Initializes an empty `self.history` list to store the conversation.
+*   `add_message(...)`: Adds the user's input and AI's response to the history.
+*   `get_context(...)`: Formats and joins the history into a single "Role: Content" string as context.
+*   `clear()`: Resets the history for a new conversation.
 
-我们可以初始化记忆类并在其之上构建 AI Agent。
+We can initialize the memory class and build the AI agent on top of it.
 ```python
 # Initialize and run the agent
 # Create an instance of our SequentialMemory strategy.
@@ -378,7 +369,7 @@ sequential_memory = SequentialMemory()
 agent = AIAgent(memory_strategy=sequential_memory)
 ```
 
-为了测试我们的顺序方法，我们需要创建一个多轮聊天对话。我们开始吧。
+To test our sequential approach, we need to create a multi-turn chat conversation. Let’s do that.
 ```python
 # --- Start the conversation ---
 # First turn: The user introduces themselves.
@@ -388,7 +379,7 @@ agent.chat("I'm interested in learning about space exploration.")
 # Third turn: The user tests the agent's memory.
 agent.chat("What was the first thing I told you?")
 ```
-> **输出：**
+> **Output:**
 > ```text
 > ========================= NEW INTERACTION =========================
 > User > Hi there! My name is Sam.
@@ -421,40 +412,26 @@ agent.chat("What was the first thing I told you?")
 > ======================================================================
 > ```
 
-对话非常流畅，但如果你注意 token 的计算，你会发现它在每一轮之后变得越来越大。我们的 Agent 不依赖任何会显著增加 token 大小的外部工具，因此这种增长纯粹是由于消息的顺序积累造成的。
+The conversation is pretty smooth, but if you pay attention to the token calculation, you’ll notice that it gets bigger and bigger after each turn. Our agent isn’t dependent on any external tool that would significantly increase the token size, so this growth is purely due to the sequential accumulation of messages.
 
-虽然顺序方法易于实现，但它有一个主要缺点：
+While the sequential approach is easy to implement, it has a major drawback:
+> The bigger your agent conversation gets, the more expensive the token cost becomes, so a sequential approach is quite costly.
 
-> 随着您的 Agent 对话变得越来越大，token 成本就变得越来越昂贵，因此顺序方法的成本相当高。
+### Sliding Window Approach
+To avoid the issue of a large context, the next approach we will focus on is the sliding window approach, where our agent doesn’t need to remember all previous messages, but only the context from a certain number of recent messages.
 
+Instead of retaining the entire conversation history, the agent keeps only the most recent N messages as context. As new messages arrive, the oldest ones are dropped, and the window slides forward.
 
-### 滑动窗口方法
-为了避免上下文过大的问题，我们将关注的下一种方法是滑动窗口方法，在这种方法中，我们的 Agent 不需要记住所有以前的消息，而只需记住最近一定数量消息的上下文。
+![Sliding Window Approach](https://cdn-images-1.medium.com/max/1500/1*or2Bz6rGKLVuUUPsFFcXYQ.png)
+*Sliding Window Approach (Created by Fareed Khan)*
 
-与保留整个对话历史不同，Agent 仅保留最近的 N 条消息作为上下文。随着新消息的到来，最旧的消息会被丢弃，窗口随之向前滑动。
-```mermaid
-graph TD
-    A[开始对话] --> B[用户消息 1]
-    B --> C[机器人回复 1]
-    C --> D[用户消息 2]
-    D --> E[机器人回复 2]
-    E --> F[仅保留最近的 N 条消息 ⏪ ⏩]
-    F --> G[丢弃最旧的，添加最新的]
-    G --> H[发送当前窗口至模型]
-    H --> I[生成回复]
-    I --> J[窗口向前滑动 ➡️]
-```
+The process is simple:
+1.  Define a fixed window size, say `N = 2` turns.
+2.  The first two turns fill up the window.
+3.  When the third turn happens, the very first turn is pushed out of the window to make space.
+4.  The context sent to the LLM is *only* what’s currently inside the window.
 
-
-
-
-过程很简单：
-1. 定义一个固定的窗口大小，比如 N = 2 轮。
-2. 前两轮填满窗口。
-3. 当发生第三轮时，最开始的第一轮会被推出窗口以腾出空间。
-4. 发送给 LLM 的上下文仅限当前窗口内的内容。
-
-现在，我们可以实现滑动窗口记忆类。
+Now, we can implement the Sliding Window Memory class.
 ```python
 from collections import deque
 
@@ -509,12 +486,12 @@ class SlidingWindowMemory(BaseMemoryStrategy):
         print("Sliding window memory cleared.")
 ```
 
-我们的顺序记忆类和滑动记忆类非常相似。关键的区别在于我们为上下文添加了一个窗口。让我们快速过一遍代码。
-- `__init__(self, window_size=2)`：设置一个固定大小的 deque（双端队列），实现上下文窗口的自动滑动。
-- add_message(...)：添加一个新轮次，当 deque 满时，旧条目会被丢弃。
-- get_context(...)：仅根据当前滑动窗口内的消息构建上下文。
+Our sequential and sliding memory classes are quite similar. The key difference is that we’re adding a window to our context. Let’s quickly go through the code.
+*   `__init__(self, window_size=2)`: Sets up a deque with a fixed size, enabling automatic sliding of the context window.
+*   `add_message(...)`: Adds a new turn, old entries are dropped when the deque is full.
+*   `get_context(...)`: Builds the context from only the messages within the current sliding window.
 
-让我们初始化滑动窗口状态记忆并在其之上构建 AI Agent。
+Let’s initialize the sliding window state memory and build the AI agent on top of it.
 ```python
 # Initialize with a small window size of 2 turns.
 # This means the agent will only remember the last two user-AI interactions.
@@ -523,7 +500,7 @@ sliding_memory = SlidingWindowMemory(window_size=2)
 agent = AIAgent(memory_strategy=sliding_memory)
 ```
 
-我们使用了一个很小的窗口大小 2，这意味着 Agent 将只记得最后两条消息。为了测试这种优化方法，我们需要一个多轮对话。因此，让我们先尝试一个直截了当的对话。
+We are using a small window size of 2, which means the agent will remember only the last two messages. To test this optimization approach, we need a multi-turn conversation. So, let’s first try a straightforward conversation.
 ```python
 # --- Start the conversation ---
 # First turn: The user introduces themselves. This is Turn 1.
@@ -534,7 +511,7 @@ agent.chat("I work primarily with Python and cloud technologies.")
 # fixed-size deque. The memory now only holds Turn 2 and Turn 3.
 agent.chat("My favorite hobby is hiking.")
 ```
-> **部分输出：**
+> **Partial Output:**
 > ```text
 > ========================= NEW INTERACTION =========================
 > User > My favorite hobby is hiking.
@@ -545,7 +522,7 @@ agent.chat("My favorite hobby is hiking.")
 > ======================================================================
 > ```
 
-对话非常相似且简单，就像我们之前在顺序方法中看到的那样。然而，现在如果用户向 Agent 询问滑动窗口内不存在的内容，让我们观察一下预期的输出。
+The conversation is quite similar and simple, just like we saw earlier in the sequential approach. However, now if the user asks the agent something that doesn’t exist within the sliding window, let’s observe the expected output.
 ```python
 # Now, ask about the first thing mentioned.
 # The context sent to the LLM will only contain the information about Python/cloud and hiking.
@@ -553,7 +530,7 @@ agent.chat("My favorite hobby is hiking.")
 agent.chat("What is my name?")
 # The agent will likely fail, as the first turn has been pushed out of the window.
 ```
-> **输出：**
+> **Output:**
 > ```text
 > ========================= NEW INTERACTION =========================
 > User > What is my name?
@@ -564,34 +541,25 @@ agent.chat("What is my name?")
 > ======================================================================
 > ```
 
+The AI agent couldn’t answer the question because the relevant context was outside the sliding window. However, we did see a reduction in token count due to this optimization.
 
-AI Agent 无法回答这个问题，因为相关的上下文在滑动窗口之外。然而，由于这种优化，我们确实看到了 token 数量的减少。
+The downside is clear, important context may be lost if the user refers back to earlier information. The sliding window is a crucial factor to consider and should be tailored based on the specific type of AI agent we are building.
 
-缺点显而易见，如果用户回头提及早期的信息，重要的上下文可能会丢失。滑动窗口是一个需要考虑的关键因素，应该根据我们正在构建的具体 AI Agent 类型进行量身定制。
-### 基于摘要的优化
-正如我们之前所见，顺序方法存在上下文巨大的问题，而滑动窗口方法则有丢失重要上下文的风险。
+### Summarization Based Optimization
+As we’ve seen earlier, the sequential approach suffers from a gigantic context issue, while the sliding window approach risks losing important context.
 
-因此，需要一种能够通过压缩上下文而不丢失基本信息来解决这两个问题的方法。这可以通过摘要（Summarization）来实现。
+Therefore, there’s a need for an approach that can address both problems, by compacting the context without losing essential information. This can be achieved through summarization.
 
-```mermaid
-graph TD
-    A[开始对话] --> B[消息存储在缓冲区 🗂️]
-    B --> C{缓冲区已满？}
-    C -- 否 --> B
-    C -- 是 --> D[将缓冲区 + 先前摘要发送给 LLM 🧠]
-    D --> E[LLM 生成更新后的摘要 📄]
-    E --> F[替换旧摘要 ✅]
-    F --> G[清空缓冲区 ♻️]
-    G --> B
-```
+![Summarization Approach](https://cdn-images-1.medium.com/max/1500/1*CYFkjlU9fR-foOCL_cGGmw.png)
+*Summarization Approach (Created by Fareed Khan)*
 
-这种策略不是简单地丢弃旧消息，而是定期使用 LLM 本身来创建对话的滚动摘要。它的工作原理如下：
-1. 最近的消息被存储在一个称为“缓冲区（buffer）的临时保留区中。
-2. 一旦这个缓冲区达到特定大小（“阈值（threshold）”），Agent 就会暂停并触发一个特殊操作。
-3. 它将缓冲区的内容连同之前的摘要一起发送给 LLM，并附带一个明确的指令：“创建一个融合了这些最近消息的最新摘要”。
-4. LLM 生成一个新的、整合后的摘要。这个新摘要取代旧摘要，并且缓冲区被清空。
+Instead of simply dropping old messages, this strategy periodically uses the LLM itself to create a running summary of the conversation. It works like this:
+1.  Recent messages are stored in a temporary holding area, called a **“buffer”**.
+2.  Once this buffer reaches a certain size (a **“threshold”**), the agent pauses and triggers a special action.
+3.  It sends the contents of the buffer, along with the previous summary, to the LLM with a specific instruction: **“Create a new, updated summary that incorporates these recent messages”**.
+4.  The LLM generates a new, consolidated summary. This new summary replaces the old one, and the buffer is cleared.
 
-让我们实现摘要优化方法，并观察它如何影响 Agent 的性能。
+Let’s implement the summarization optimization approach and observe how it affects the agent’s performance.
 ```python
 # --- Strategy 3: Summarization Memory ---
 # This strategy aims to manage long conversations by periodically summarizing them.
@@ -671,13 +639,13 @@ class SummarizationMemory(BaseMemoryStrategy):
         print("Summarization memory cleared.")
 ```
 
-与之前的方法相比，我们的摘要记忆组件有些不同。让我们分解并理解刚刚编写的组件。
-- `__init__(...)`：设置一个空的 running_summary 字符串和一个空的 buffer 列表。
-- add_message(...)：将消息添加到缓冲区。如果缓冲区大小达到我们的 summary_threshold，它会调用私有方法 _consolidate_memory。
-- `_consolidate_memory()`：这是新的、重要的部分。它将缓冲区内容和现有的摘要格式化为特殊的提示词，要求 LLM 创建新的摘要，更新 self.running_summary，并清空缓冲区。
-- get_context(...)：为 LLM 提供长期摘要和短期缓冲区内容，使其了解对话的完整全貌。
+Our summarization memory component is a bit different compared to the previous approaches. Let’s break down and understand the component we’ve just coded.
+*   `__init__(...)`: Sets up an empty `running_summary` string and an empty `buffer` list.
+*   `add_message(...)`: Adds messages to the buffer. If the buffer size meets our `summary_threshold`, it calls the private `_consolidate_memory` method.
+*   `_consolidate_memory()`: This is the new, important part. It formats the buffer content and the existing summary into a special prompt, asks the LLM to create a new summary, updates `self.running_summary`, and clears the buffer.
+*   `get_context(...)`: Provides the LLM with both the long-term summary and the short-term buffer, giving it a complete picture of the conversation.
 
-让我们初始化摘要记忆组件并在其之上构建 AI Agent。
+Let’s initialize the summary memory component and build the AI agent on top of it.
 ```python
 # Initialize the SummarizationMemory with a threshold of 4 messages (2 turns).
 # This means a summary will be generated after the second full interaction.
@@ -686,12 +654,11 @@ summarization_memory = SummarizationMemory(summary_threshold=4)
 agent = AIAgent(memory_strategy=summarization_memory)
 ```
 
-初始化方式与我们之前看到的相同。我们将摘要阈值设置为 4，这意味着每 2 轮对话后，就会生成一个摘要并将其作为上下文传递给 AI Agent，而不是传递全部或滑动窗口的对话历史记录。
+The initialization is done in the same way as we saw earlier. We’ve set the summary threshold to 4, which means after every 2 turns, a summary will be generated and passed as context to the AI agent, instead of the entire or sliding window conversation history.
 
-这符合摘要方法的核心目标，即在保留重要信息的同时节省 token。
+This aligns with the core goal of the summarization approach, saving tokens while retaining important information.
 
-让我们测试这种方法，并评估其在 token 使用和保留相关上下文方面的效率。
-
+Let’s test this approach and evaluate how efficient it is in terms of token usage and preserving relevant context.
 ```python
 # --- Start the conversation ---
 # First turn: The user provides initial details.
@@ -700,7 +667,7 @@ agent.chat("I'm starting a new company called 'Innovatech'. Our focus is on sust
 # the buffer will contain 4 messages, triggering the memory consolidation process.
 agent.chat("Our first product will be a smart solar panel, codenamed 'Project Helios'.")
 ```
-> **部分输出：**
+> **Partial Output:**
 > ```text
 > ========================= NEW INTERACTION =========================
 > User > Our first product will be a smart solar panel, codenamed 'Project Helios'.
@@ -714,16 +681,16 @@ agent.chat("Our first product will be a smart solar panel, codenamed 'Project He
 > ======================================================================
 > ```
 
-到目前为止，我们已经进行了两轮基本对话。既然我们将摘要生成器的参数设置为了 2 轮（4 条消息），现在将为之前的轮次生成一个摘要。
+So far, we’ve had two basic conversation turns. Since we’ve set the summary generator parameter to 2, a summary will now be generated for those previous turns.
 
-让我们继续下一轮，并观察对 token 使用的影响。
+Let’s proceed with the next turn and observe the impact on token usage.
 ```python
 # Third turn: The user adds another detail.
 agent.chat("The marketing budget is set at $50,000.")
 # Fourth turn: The user tests the agent's memory.
 agent.chat("What is the name of my company and its first product?")
 ```
-> **输出：**
+> **Output:**
 > ```text
 > ========================= NEW INTERACTION =========================
 > User > What is the name of my company and its first product?
@@ -734,14 +701,13 @@ agent.chat("What is the name of my company and its first product?")
 > ======================================================================
 > ```
 
-你注意到了吗，在我们的第四次对话中，token 数下降到了在顺序和滑动窗口方法中看到的大约一半？这就是摘要方法最大的优点，它极大地减少了 token 的使用。
+Did you notice that in our fourth conversation, the token count dropped to nearly half of what we saw in the sequential and sliding window approaches? That’s the biggest advantage of the summarization approach, it greatly reduces token usage.
 
-然而，为了使其真正有效，您的摘要提示词需要经过精心设计，以确保它们能捕捉到最重要的细节。
+However, for it to be truly effective, your summarization prompts need to be carefully crafted to ensure they capture the most important details.
 
-主要的缺点是，在摘要过程中仍然可能丢失关键信息。例如，如果你将对话持续 40 轮，并且包含了数字或事实细节，那么早期的关键信息很可能不再出现在摘要中。
+The main downside is that critical information can still be lost in the summarization process. For example, if you continue a conversation for up to 40 turns and include numeric or factual details, there’s a risk that earlier key info may not appear in the summary anymore.
 
-让我们看这个例子，你和 AI Agent 进行了 40 轮对话，并包含了几个数字细节。
-
+Let’s take a look at this example, where you had a 40-turn conversation with the AI agent and included several numeric details.
 ```python
 # 42th turn: The user tests the agent's memory.
 agent.chat("what was the gross sales of our company in the fiscal year?")
@@ -757,36 +723,25 @@ agent.chat("what was the gross sales of our company in the fiscal year?")
 > ======================================================================
 > ```
 
+You can see that although the summarized information uses fewer tokens, the answer quality and accuracy can decrease significantly because of problematic context being passed to the AI agent.
 
-你可以看到，虽然摘要信息使用的 token 更少，但由于传递给 AI Agent 的上下文存在问题，回答的质量和准确性可能会显著下降。
+### Retrieval Based Memory
+This is the most powerful strategy used in many AI agent use cases: RAG-based AI agents. As we saw earlier, previous approaches reduce token usage but risk losing relevant context. RAG, however, is different—it retrieves relevant context based on the current user query.
 
-### 基于检索的记忆
-这是许多 AI Agent 用例中使用的最强大的策略：基于 RAG（检索增强生成）的 AI Agent。正如我们前面所看到的，之前的方法减少了 token 的使用，但存在丢失相关上下文的风险。然而，RAG 是不同的——它根据当前的用户查询检索相关的上下文。
+The context is stored in a database, where embedding models play a crucial role by transforming text into vector representations that make retrieval efficient.
 
-上下文存储在数据库中，在这个过程中，嵌入模型起着至关重要的作用，它将文本转换为向量表示，从而实现高效的检索。
+Let’s visualize how this process works.
+![RAG Based Memory](https://cdn-images-1.medium.com/max/1000/1*8Z-SOoSPqsZDOftS8GK3gA.png)
+*RAG Based Memory (Created by Fareed Khan)*
 
-让我们将这个过程可视化。
+Let’s understand the workflow of RAG-based memory:
+1.  Every time a new interaction happens, it’s saved as a “document” in a specialized database. We also generate a numerical representation of this document’s meaning, called an **embedding**, and store it.
+2.  When the user sends a new message, the agent first converts this new message into an embedding as well.
+3.  It then uses this query embedding to perform a **similarity search** against all the document embeddings stored in its memory database.
+4.  The system retrieves the top *k* most semantically relevant documents.
+5.  Finally, only these highly relevant, retrieved documents are injected into the LLM’s context window.
 
-```mermaid
-graph TD
-    A[新消息到达 ✉️] --> B[创建词嵌入 🔢]
-    A --> C[将消息存储为文档 🗂️]
-    B --> D[搜索向量数据库 🔍]
-    D --> E[查找 Top-K 相关文档 📚]
-    E --> F[将检索到的文档注入上下文 🧠]
-    F --> G[生成回复 💬]
-    C --> H[创建并存储词嵌入]
-```
-
-
-让我们了解基于 RAG 的记忆的工作流程：
-1. 每次发生新的交互时，它都会作为“文档（document）”保存在专门的数据库中。我们还会生成该文档含义的数值表示形式，称为嵌入（embedding），并将其存储起来。
-2. 当用户发送新消息时，Agent 首先也会将这条新消息转换为嵌入向量。
-3. 然后，它使用这个查询的嵌入向量对其记忆数据库中存储的所有文档嵌入向量执行相似性搜索（similarity search）。
-4. 系统检索出前 k 个在语义上最相关的文档。
-5. 最后，只有这些高度相关且被检索出的文档会被注入到 LLM 的上下文窗口中。
-
-在此方法中，我们将使用 FAISS 进行向量存储。让我们编写这个记忆组件的代码。
+We will be using FAISS for vector storage in this approach. Let’s code this memory component.
 ```python
 import numpy as np
 import faiss
@@ -838,22 +793,22 @@ class RetrievalMemory(BaseMemoryStrategy):
         print("Retrieval memory cleared.")
 ```
 
-让我们过一遍代码中发生的事情。
+Let’s go through what’s happening in the code.
+*   `__init__(...)`: We initialize a list for our text documents and a `faiss.IndexFlatL2` to store and search our vectors.
+*   `add_message(...)`: For each turn, we generate an embedding for both the user and AI messages and add them to our FAISS index.
+*   `get_context(...)`: This is important. It embeds the user's query, uses `self.index.search` to find the `k` most similar vectors, and then uses their indices to pull the original text from our documents list. This retrieved text becomes the context.
 
-- `__init__(...)`：我们为文本文档初始化一个列表，并初始化一个 faiss.IndexFlatL2 来存储和搜索我们的向量。
-- add_message(...)：在每一轮中，我们为用户和 AI 的消息生成嵌入向量，并将它们添加到我们的 FAISS 索引中。
-- get_context(...)：这很重要。它对用户的查询进行嵌入，使用 self.index.search 找到 k 个最相似的向量，然后使用它们的索引从我们的文档列表中提取原始文本。提取出来的文本就变成了上下文。
-
-和以前一样，我们初始化我们的记忆状态并使用它构建 AI Agent。
+As before, we initialize our memory state and build the AI agent using it.
 ```python
 # Initialize the RetrievalMemory with k=2.
 retrieval_memory = RetrievalMemory(k=2)
 # Create an AIAgent and inject the retrieval memory strategy.
 agent = AIAgent(memory_strategy=retrieval_memory)
 ```
-我们将 k 设置为 2，这意味着我们只获取与用户查询相关的两个块（chunks）。在处理更大的数据集时，我们通常将 k 设置为更高的值。
 
-让我们用这个设置测试一下我们的 AI Agent。
+We are setting `k = 2`, which means we fetch only two relevant chunks related to the user's query. When dealing with larger datasets, we typically set `k` to a higher value.
+
+Let's test our AI agent with this setup.
 ```python
 # --- Start the conversation with mixed topics ---
 agent.chat("I am planning a vacation to Japan for next spring.")
@@ -862,8 +817,7 @@ agent.chat("I want to visit Tokyo and Kyoto while I'm on my trip.")
 agent.chat("The backend of my project will be built with Django.")
 ```
 
-现在，让我们根据过去的信息尝试一次较新的对话，看看相关上下文的检索效果如何。
-
+Now, let’s try a newer conversation based on past information and see how well the relevant context is retrieved.
 ```python
 # --- Test the retrieval mechanism ---
 # Ask a question specifically about the vacation.
@@ -892,38 +846,27 @@ agent.chat("What cities am I planning to visit on my vacation?")
 > ======================================================================
 > ```
 
-你可以看到相关上下文已被成功获取，并且由于我们仅检索最切题的信息，因此 token 数极低。
+You can see that the relevant context has been successfully fetched, and the token count is extremely low because we’re retrieving only the pertinent information.
 
-嵌入模型和向量存储数据库的选择在这里起着至关重要的作用。然而，其缺点是这种方法的实现比看起来要复杂得多。
+The choice of embedding model and the vector storage database plays a crucial role here. However, the downside is that this approach is more complex to implement than it seems.
 
-### 记忆增强的Transformer
-除了这些核心策略之外，AI 系统正在实现更加复杂的方法。我们可以通过一个类比来理解这项技术：想象一个普通的 AI 就像一个拿着小记事本的学生。他们必须擦掉旧笔记才能腾出空间记新笔记。
+### Memory Augmented Transformers
+Beyond these core strategies, AI systems are implementing even more sophisticated approaches. We can understand this technique through an analogy: imagine a regular AI is like a student with a small notepad. They have to erase old notes to make room for new ones.
 
-现在，记忆增强 Transformer 就像给那个学生一堆便利贴。记事本仍用于处理当前的工作，但便利贴帮助他们保存之前的关键信息。
+Now, memory-augmented transformers are like giving that student a bunch of sticky notes. The notepad still handles the current work, but the sticky notes help them save key info from earlier.
+1.  You're designing a video game with an AI. Early on, you say you want it to be set in space with no violence. Normally, that would get forgotten after a long talk. But with memory, the AI writes “space setting, no violence” on a sticky note.
+2.  Later, when you ask, **“What characters would fit our game?”**, it checks the note and gives ideas that match your original vision, even hours later.
+3.  It’s like having a smart helper who remembers the important stuff without needing you to repeat it.
 
-1. 您正在与一个 AI 设计一款电子游戏。在早期，你说你想把它设定在太空中并且没有暴力元素。通常情况下，经过长时间的交谈后这一点会被遗忘。但有了记忆功能后，AI 会在便利贴上写下“太空背景，无暴力”。
-2. 稍后，当你问：“什么角色适合我们的游戏？” 时，它会查看便利贴，并给出符合你最初构想的想法，即使几个小时过去了也是如此。
-3. 这就像有一个聪明的助手，它能记住重要的事情，而不需要你重复。
+Let’s visualize this:
+![Memory Augmented Transformers](https://cdn-images-1.medium.com/max/1500/1*1QwdzehNJx-IChNvs6C6aQ.png)
+*Memory Augmented Transformers (Created by Fareed Khan)*
 
-让我们将其可视化：
-```mermaid
-graph TD
-    A[用户对话进行中 💬] --> B[上下文窗口主要笔记 📓]
-    B --> C{上下文是否已满？}
-    C -- 否 --> B
-    C -- 是 --> D[选择关键信息用于长期记忆 🧠]
-    D --> E[作为记忆 Token 便利贴存储 🗒️]
-    E --> F[带着记忆访问权限继续对话 🔄]
-    F --> G[根据需要参考记忆 Token 🔍]
-    G --> H[基于两者生成回复 📄 + 🗒️]
-```
-
-
-我们将创建一个具备以下特征的记忆类：
-- 对最近的聊天使用 SlidingWindowMemory（滑动窗口记忆）。
-- 在每一轮对话之后，使用 LLM 充当**“事实提取器（fact extractor）”**。它会分析对话，判断其中是否包含核心事实、偏好或决策。
-- 如果找到重要事实，它将作为一个 memory token（一个简明的字符串）存储在一个单独的列表中。
-- 提供给 Agent 的最终上下文是最近的聊天窗口和所有持久化的 memory tokens 的组合。
+We will create a memory class that:
+*   Uses a `SlidingWindowMemory` for recent chat.
+*   After each turn, uses the LLM to act as a **“fact extractor.”** It will analyze the conversation and decide if it contains a core fact, preference, or decision.
+*   If an important fact is found, it’s stored as a `memory token` (a concise string) in a separate list.
+*   The final context provided to the agent is a combination of the recent chat window and all the persistent `memory tokens`.
 
 ```python
 # --- Strategy 5: Memory-Augmented Memory (Simulation) ---
@@ -960,14 +903,14 @@ class MemoryAugmentedMemory(BaseMemoryStrategy):
         print("Memory-augmented memory cleared.")
 ```
 
-让我们初始化这个记忆增强状态和 AI Agent。
+Let’s initialize this memory-augmented state and AI agent.
 ```python
 # Initialize the MemoryAugmentedMemory with a window size of 2.
 mem_aug_memory = MemoryAugmentedMemory(window_size=2)
 # Create an AIAgent and inject the memory-augmented strategy.
 agent = AIAgent(memory_strategy=mem_aug_memory)
 ```
-我们使用之前设置的窗口大小 2。现在，我们可以简单地使用多轮聊天对话来测试这种方法。
+We are using a window size of 2, just as we set previously. Now, we can simply test this approach using a multi-turn chat conversation.
 ```python
 # --- Start the conversation ---
 # The agent's fact-extraction mechanism should identify this as important.
@@ -976,7 +919,7 @@ agent.chat("Please remember this for all future interactions: I am severely alle
 agent.chat("Okay, let's talk about recipes. What's a good idea for dinner tonight?")
 agent.chat("That sounds good. What about a dessert option?")
 ```
-现在，让我们测试一下记忆增强技术。
+Now, let’s test the memory-augmented technique.
 ```python
 # --- Test the memory augmentation ---
 # The agent's only way to know about the allergy is by accessing its long-term "memory tokens".
@@ -1006,37 +949,27 @@ agent.chat("Could you suggest a Thai green curry recipe? Please ensure it's safe
 > ======================================================================
 > ```
 
-这是一个更复杂、更昂贵的策略，因为需要额外的 LLM 调用来进行事实提取，但是它在漫长而不断发展的对话中保留关键信息的能力使其变得异常强大。
-### 多任务的分层优化
+It is a more complex and expensive strategy due to the extra LLM calls for fact extraction, but its ability to retain critical information over long, evolving conversations makes it incredibly powerful.
 
-到目前为止，我们一直将记忆视为一个单一系统。但是，如果我们能够构建一个更像人类思维的 Agent，为不同目的配备不同类型的记忆呢？
+### Hierarchical Optimization for Multi-tasks
+So far, we have treated memory as a single system. But what if we could build an agent that thinks more like a human, with different *types* of memory for different purposes?
 
-这就是**分层记忆（Hierarchical Memory）**背后的理念。它将多种较简单的记忆类型组合成一个分层系统。想想你是如何记住事情的：
-- 工作记忆（Working Memory）： 某人刚才说的最后几句话。它速度很快，但转瞬即逝。
-- 短期记忆（Short-Term Memory）： 会议的要点。你可以在几个小时内回忆起它们。
-- 长期记忆（Long-Term Memory）： 你的家庭住址。它是持久且根深蒂固的。
+This is the idea behind **Hierarchical Memory**. It combines multiple, simpler memory types into a layered system. Think about how you remember things:
+*   **Working Memory:** The last few sentences someone said. It’s fast, but fleeting.
+*   **Short-Term Memory:** The main points from a meeting. You can recall them for a few hours.
+*   **Long-Term Memory:** Your home address. It’s durable and deeply ingrained.
 
-```mermaid
-graph TD
-    A[用户消息 💬] --> B[级别 1：滑动窗口工作记忆 🧠]
-    B --> C{满足提升条件？}
-    C -- 否 --> D[随时间丢弃 ⏳]
-    C -- 是 --> E[存储至检索记忆 🗄️]
-    E --> F[级别 2：长期向量数据库 🔍]
-    F --> G[针对新查询进行搜索]
-    G --> H[将相关记忆注入上下文 🧬]
-    H --> I[生成回复]
-```
+![Hierarchical Optimization](https://cdn-images-1.medium.com/max/1500/1*QkkxYgljHjcDjhzm3jrY6A.png)
+*Hierarchical Optimization (Created by Fareed Khan)*
 
+Hierarchical approach works like this:
+1.  It starts by capturing the user message into working memory.
+2.  Then it checks if the information is important enough to promote to long-term memory.
+3.  After that, promoted content is stored in a retrieval memory for future use.
+4.  On new queries, it searches long-term memory for relevant context.
+5.  Finally, it injects relevant memories into context to generate better responses.
 
-分层方法的工作原理如下：
-1. 它首先将用户消息捕获到工作记忆中。
-2. 然后它检查信息是否足够重要，以便将其提升至长期记忆。
-3. 之后，被提升的内容被存储在检索记忆中以备将来使用。
-4. 对于新的查询，它在长期记忆中搜索相关的上下文。
-5. 最后，它将相关的记忆注入到上下文中以生成更好的响应。
-
-让我们构建这个组件。
+Let’s build this component.
 ```python
 # --- Strategy 6: Hierarchical Memory ---
 class HierarchicalMemory(BaseMemoryStrategy):
@@ -1067,8 +1000,7 @@ class HierarchicalMemory(BaseMemoryStrategy):
         self.long_term_memory.clear()
         print("Hierarchical memory cleared.")
 ```
-现在让我们初始化记忆组件和 AI Agent。
-
+Let’s now initialize the memory component and AI agent.
 ```python
 # Initialize the HierarchicalMemory.
 hierarchical_memory = HierarchicalMemory()
@@ -1076,7 +1008,7 @@ hierarchical_memory = HierarchicalMemory()
 agent = AIAgent(memory_strategy=hierarchical_memory)
 ```
 
-我们现在可以针对这项技术创建一个多轮聊天对话。
+We can now create a multi-turn chat conversation for this technique.
 ```python
 # --- Start the conversation ---
 # Provide important information with a keyword ("remember").
@@ -1090,7 +1022,7 @@ agent.chat("I'm planning to go for a walk later.")
 agent.chat("I need to log into my account, can you remind me of my ID?")
 ```
 
-让我们看看 AI Agent 的输出。
+Let’s look at the output of the AI agent.
 > **Output:**
 > ```text
 > ========================= NEW INTERACTION =========================
@@ -1117,25 +1049,19 @@ agent.chat("I need to log into my account, can you remind me of my ID?")
 > ======================================================================
 > ```
 
-如你所见，Agent 成功地结合了不同的记忆类型。它使用快速的工作记忆来维持对话流，但在被问及时，能正确地查询其深层的长期记忆以检索关键的用户 ID。
+As you can see, the agent successfully combines different memory types. It uses the fast working memory for the flow of conversation but correctly queries its deep, long-term memory to retrieve the critical User ID when asked.
 
-### 基于图的优化
-到目前为止，我们的记忆将信息存储为文本块。但是如果我们能教我们的 Agent 理解不同信息片段之间的关系呢？这就是我们在使用基于图的记忆（Graph-Based Memory）时所实现的跨越。
+### Graph Based Optimization
+So far, our memory has stored information as chunks of text. But what if we could teach our agent to understand the relationships between different pieces of information? This is the leap we take with **Graph-Based Memory**.
 
-该策略将信息表示为一个知识图谱，包含：
-- 节点Nodes（或实体Entities）：我们对话中的“事物”，例如人（Clara）、公司（FutureScape）或概念（Project Odyssey）。
-- 边Edges（或关系Relations）：描述节点之间如何关联的连接，例如 works_for（为...工作）或 manages（管理）。
+This strategy represents information as a knowledge graph with:
+*   `Nodes` (or `Entities`): The "things" in our conversation, like people (`Clara`), companies (`FutureScape`), or concepts (`Project Odyssey`).
+*   `Edges` (or `Relations`): The connections that describe how nodes relate, like `works_for` or `manages`.
 
-```mermaid
-graph LR
-    A((👩 Clara)) -- 👥 管理 --> D((🚀 奥德赛项目))
-    A -- 🏷️ 角色 --> B((💼 产品负责人))
-    A -- 🧭 就职于 --> C((🏢 FutureScape))
-    C -- 📦 拥有 --> D
-    D -- 🎯 专注于 --> E((🧠 AI 伦理))
-```
+![Graph Based Approach](https://cdn-images-1.medium.com/max/1500/1*uj8FkymY4eA_Jy1GLwAAmg.png)
+*Graph Based Approach (Created by Fareed Khan)*
 
-这对于回答需要推理的复杂查询非常有效。为此，我们可以将 LLM 本身作为一个工具，从文本中提取结构化的（主语，关系，宾语）三元组。我们将使用 networkx 库来构建我们的图谱。
+This is powerful for answering complex queries that require reasoning. For this, we can use the LLM itself as a tool to extract structured **(Subject, Relation, Object)** triples from the text. We’ll use the `networkx` library to build our graph.
 
 ```python
 import networkx as nx
@@ -1195,8 +1121,7 @@ class GraphMemory(BaseMemoryStrategy):
         print("Graph memory cleared.")
 ```
 
-让我们看看我们的 Agent 能否为一个场景构建心智图谱。
-
+Let’s see if our agent can build a mental map of a scenario.
 ```python
 # Initialize the GraphMemory strategy and the agent.
 graph_memory = GraphMemory()
@@ -1232,30 +1157,22 @@ agent.chat("Tell me about Clara's project.")
 > ======================================================================
 > ```
 
-Agent 不仅找到了一条包含“Clara”和“project”的句子，它还导航其内部图谱以呈现与查询实体相关的所有已知事实。
+The agent didn’t just find a sentence containing “Clara” and “project”, it navigated its internal graph to present all known facts related to the entities in the query.
+> This opens the door to building highly knowledgeable expert agents.
 
+### Compression & Consolidation Memory
+We have seen that summarization is a good way to manage long conversations, but what if we could be even more aggressive in cutting down token usage? This is where **Compression & Consolidation Memory** comes into play.
 
-> 这为构建知识渊博的专家 Agent 打开了大门。
+Instead of creating a narrative summary, the goal here is to distill each piece of information into its most dense, factual representation.
 
-### 压缩与整合记忆
-我们已经看到，摘要是管理长对话的好方法，但如果我们能在削减 token 使用量方面做得更激进呢？这就是**压缩与整合记忆**发挥作用的地方。
+![Compression Approach](https://cdn-images-1.medium.com/max/1500/1*6nVPw8Bo-29G9PDqQQgEeQ.png)
+*Compression Approach (Created by Fareed Khan)*
 
-与创建叙事性的摘要不同，这里的目标是将每条信息提炼成最密集、最具事实性的表现形式。
-
-```mermaid
-graph TD
-    A[🗣️ 用户输入 + 🤖 AI 回复] --> B[🧠 附带压缩提示发送至 LLM]
-    B --> C[🔍 仅提取核心事实]
-    C --> D[📄 存储于压缩记忆的扁平列表中]
-    D --> E[🧬 在需要时用于提供上下文]
-```
-
-
-这个过程很简单：
-1. 每一轮对话后，Agent 将文本发送给 LLM。
-2. 它使用一个特定的提示词，要求 LLM 像一个**“数据压缩引擎”**一样运作。
-3. LLM 的任务是将该轮对话重写为一条单一的、本质性的陈述，剥去所有无关紧要的对话客套话。
-4. 这个高度压缩的事实随后被存储在一个简单的列表中。
+The process is straightforward:
+1.  After each turn, the agent sends the text to the LLM.
+2.  It uses a specific prompt that asks the LLM to act like a **“data compression engine”**.
+3.  The LLM’s task is to re-write the turn as a single, essential statement, stripping out all conversational fluff.
+4.  This highly compressed fact is then stored in a simple list.
 
 ```python
 # --- Strategy 8: Compression & Consolidation Memory ---
@@ -1287,8 +1204,7 @@ class CompressionMemory(BaseMemoryStrategy):
         print("Compression memory cleared.")
 ```
 
-让我们用一个简单的规划对话来测试一下这个策略。
-
+Let’s test this strategy with a simple planning conversation.
 ```python
 # Initialize the CompressionMemory strategy and the agent.
 compression_memory = CompressionMemory()
@@ -1322,29 +1238,22 @@ agent.chat("Could you please summarize the key details for the conference plan?"
 > ======================================================================
 > ```
 
-如你所见，该策略在保留核心事实的同时极其有效地减少了 token 的数量。
+As you can see, this strategy is extremely effective at reducing token count while preserving core facts.
 
-### 类OS的记忆管理
-如果我们能为 Agent 构建一个像电脑内存一样工作的记忆系统会怎样？这个概念借鉴了操作系统（OS）管理**RAM和硬盘**的方式。
-- RAM： 这是用于活动程序的超高速存储。对于我们的 Agent 来说，LLM 的上下文窗口就是它的 RAM——速度快但容量有限。
-- Hard Disk（硬盘）： 这是长期存储。它容量更大且成本更低，但速度较慢。对于我们的 Agent 来说，这可以是外部数据库或文件。
+### OS-Like Memory Management
+What if we could build a memory system for our agent that works just like the memory in your computer? This concept borrows from how an OS manages **RAM** and a **hard disk**.
 
-```mermaid
-graph TD
-    A[🧠 主动记忆 - LLM 上下文] --> B[🛫 换出 - 将旧信息移至存储]
-    C[⚠️ 缺页异常 - 在上下文中未找到信息] --> D[🗃️ 被动记忆 - 外部存储]
-    B --> D
-    D --> E[🛬 换入 - 将相关信息重新加载回]
-    E --> A
-```
+*   **RAM:** This is the super-fast memory for active programs. For our agent, the LLM’s context window is its RAM—fast but limited.
+*   **Hard Disk:** This is long-term storage. It’s larger and cheaper, but slower. For our agent, this can be an external database or file.
 
+![OS Like Memory Management](https://cdn-images-1.medium.com/max/1500/1*shAJN9Sr6X_PcFpaJqViLQ.png)
+*OS Like Memory Management (Created by Fareed Khan)*
 
-
-该策略通过在两个层级之间移动信息来工作：
-1. 活动记忆（RAM）： 最近的对话轮次被保存在这里。
-2. 被动记忆（硬盘）： 当活动记忆满了时，最旧的信息会被移动到被动存储中。这就是“换出（paging out）”。
-3. 缺页中断（Page Fault）： 当用户询问不在活动记忆中的信息时，就会发生“缺页中断”。
-4. 系统在被动存储中找到该信息并将其加载回来。这就是“换入”**。
+This strategy works by moving information between two tiers:
+1.  **Active Memory (RAM):** The most recent turns are kept here.
+2.  **Passive Memory (Disk):** When active memory is full, the oldest information is moved to passive storage. This is **“paging out.”**
+3.  **Page Fault:** When the user asks about information *not* in active memory, a “page fault” occurs.
+4.  The system finds the info in passive storage and loads it back. This is **“paging in.”**
 
 ```python
 # --- Strategy 9: OS-Like Memory Management (Simulation) ---
@@ -1386,8 +1295,7 @@ class OSMemory(BaseMemoryStrategy):
         print("OS-like memory cleared.")
 ```
 
-让我们运行一个场景，在这个场景中，Agent 被告知一个密码，然后该密码被“换出”到被动记忆中。
-
+Let’s run a scenario where the agent is told a secret code, which is then **“paged out”** to passive memory.
 ```python
 # Initialize the OS-like memory strategy with a RAM size of 2 turns.
 os_memory = OSMemory(ram_size=2)
@@ -1427,126 +1335,20 @@ agent.chat("I need to confirm the launch code.")
 > ======================================================================
 > ```
 
-完美运行！这是一个概念上非常强大的模型，用于构建具有几乎无限记忆的大规模系统，同时保持活动上下文的精简和快速。
+It works perfectly! This is a conceptually powerful model for building large-scale systems with virtually limitless memory while keeping the active context small and fast.
 
-### 选择合适的策略
+### Choosing the Right Strategy
+We have gone through nine distinct memory optimization strategies. There is no single “best” strategy; the right choice is a balance of your agent’s needs, your budget, and your engineering resources.
+> Let’s understand when to choose what?
 
-我们已经梳理了九种不同的记忆优化策略。没有绝对的“最佳”策略；正确的选择是在您的 Agent 需求、预算和工程资源之间取得平衡。
+*   **For simple, short-lived bots:** Sequential or Sliding Window are perfect. They are easy to implement and get the job done.
+*   **For long, creative conversations:** Summarization is a great choice to maintain the general flow without a massive token overhead.
+*   **For agents needing precise, long-term recall:** Retrieval-Based memory is the industry standard. It’s powerful, scalable, and the foundation of most RAG applications.
+*   **For highly reliable personal assistants:** Memory-Augmented or Hierarchical approaches provide a robust way to separate critical facts from conversational chatter.
+*   **For expert systems and knowledge bases:** Graph-Based memory is unparalleled in its ability to reason about relationships between data points.
 
-> 让我们来了解一下何时该作何选择？
+The most powerful agents in production often use **hybrid approaches**, combining these techniques. You might use a hierarchical system where the long-term memory is a combination of both a vector database and a knowledge graph.
 
-- 对于简单的、短期存在的机器人： 顺序（Sequential）或滑动窗口（Sliding Window）是完美的。它们易于实现且能完成任务。
-- 对于漫长且富有创造力的对话： 摘要（Summarization）是一个很好的选择，可以在没有大量 token 开销的情况下维持总体流程。
-- 对于需要精确、长期回忆的 Agent： 基于检索（Retrieval-Based）的记忆是行业标准。它强大、可扩展，并且是大多数 RAG 应用的基础。
-- 对于高可靠性的个人助手： 记忆增强（Memory-Augmented）或分层（Hierarchical）方法提供了一种强大的方式，将关键事实与对话闲聊区分开来。
-- 对于专家系统和知识库： 基于图（Graph-Based）的记忆在推理数据点之间关系的能力上是无与伦比的。
+The key is to start with a clear understanding of what you need your agent to remember, for how long, and with what level of precision. By mastering these memory strategies, you can move beyond building simple chatbots and start creating truly intelligent agents that learn, remember, and perform better over time.
 
-生产环境中最强大的 Agent 通常使用混合方法（hybrid approaches），将这些技术结合起来。您可能会使用一个分层系统，其中长期记忆是向量数据库和知识图谱的结合。
-
-关键是要从清晰地理解你希望你的 Agent 记住什么、记住多久以及达到什么样的精度要求开始。通过掌握这些记忆策略，你可以超越构建简单的聊天机器人，开始创建真正随着时间推移去学习、记忆并表现得更好的智能 Agent。
-
-> 祝阅读愉快
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+> Happy reading
